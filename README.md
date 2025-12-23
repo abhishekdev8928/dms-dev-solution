@@ -213,39 +213,25 @@ Controls granular resource access within departments
 
 ## 🔄 Sharing Model
 
-### Sharing Mechanisms
+### What is "Sharing"?
 
-Folders can be shared through **two methods**:
+**Sharing** means **giving access to a specific folder or files to other users.**
 
-#### 1. Public Sharing
-- Folder becomes accessible to anyone in the organization
-- Users maintain read-only access unless elevated
-- Ideal for company-wide resources
+That's it. Simple.
 
-#### 2. Specific User Sharing
-- Folder shared with named individuals
-- Granular access control
-- Shared folders appear in user's **"Shared With Me"** section
+> 💡 **Core Concept:** You use sharing when you want someone else to access your folder/files.
 
-### Sharing Rules
+### When Do You Share?
 
-✅ **Allowed**
-- Folder Manager can share their folders
-- Admin/Dept Head can share within their scope
-- Super Admin can share anything
+**You share when:**
+- Someone needs to see your folder
+- A colleague needs to work on your files
+- You want to collaborate with specific people
+- You need to give temporary access
 
-❌ **Restricted**
-- Folder User cannot share
-- Sharing never transfers ownership
-- Original creator remains the owner
-- Share recipients cannot re-share (unless promoted)
-
-### Shared Folder Behavior
-
-- Appears under **"Shared With Me"** for recipients
-- Original location structure remains intact
-- Permissions determined by recipient's role
-- Ownership never changes through sharing
+**You DON'T share when:**
+- Users already have access through their role (Admin, Dept Head, etc.)
+- It's within the same department and users can already see it
 
 ---
 
@@ -322,6 +308,292 @@ Complete permission trail enables regulatory compliance and security audits
 5. **Folder Users** access shared folders for collaboration
 
 > **Permission Inheritance:** Higher roles automatically include all permissions of lower roles within their scope
+
+---
+
+## 🤔 Common Questions & Design Decisions
+
+### The Nested Folder Problem
+
+When implementing a folder-based DMS, three critical questions arise:
+
+**Question 1: Folder Manager Scope with Nested Folders**
+If a user (e.g., Abhishek) is assigned as a Folder Manager of a top-level folder, does that automatically grant them full access to all nested subfolders and files within that folder? Or do nested folders require separate Folder Manager assignments?
+
+**Question 2: Folder User Visibility in Nested Folders**
+When a Folder Manager shares a folder with a Folder User, does the Folder User have access to all subfolders and files inside it, or only the files in the shared top-level folder?
+
+**Question 3: Assigning Folder Manager Role**
+Who has the authority to assign a user as a Folder Manager for a folder? Can it be Super Admin only, Admin/Department Head, or an existing Folder Manager themselves?
+
+---
+
+### ✅ Our Solution: Permission Inheritance Model
+
+This system uses **automatic permission inheritance** for nested folders to maintain simplicity and intuitive behavior.
+
+#### Core Principle
+
+**Permissions flow DOWN the folder tree automatically.**
+
+```
+Department: Marketing
+  └── Campaign 2025 (Manager: Abhishek)
+       ├── Design Assets (automatically managed by Abhishek)
+       │    └── Logos (automatically managed by Abhishek)
+       ├── Reports (automatically managed by Abhishek)
+       └── budget.xlsx (automatically accessible)
+```
+
+---
+
+### 📋 Inheritance Rules
+
+#### Rule 1: Folder Manager Inheritance
+```
+✅ Folder Manager of parent folder = Manager of ALL subfolders
+✅ Full CRUD access applies to entire folder tree
+✅ Can create/delete/share anything within the hierarchy
+✅ No need to assign permissions to each subfolder
+```
+
+**Example:**
+- Abhishek is Folder Manager of "Campaign 2025"
+- He automatically manages "Design Assets", "Logos", and "Reports"
+- He can delete, share, or modify anything inside
+
+#### Rule 2: Folder User Inheritance
+```
+✅ Shared folder access includes ALL subfolders and files
+✅ Permission level (view/edit) applies to entire tree
+✅ User sees complete folder structure
+```
+
+**Example:**
+- Priya is given Folder User access to "Campaign 2025"
+- She can view "Design Assets", "Logos", "Reports", and all files
+- Her permission level (view-only or edit) applies everywhere inside
+
+#### Rule 3: Folder Manager Assignment Authority
+```
+✅ Department Head can assign Folder Managers in their department
+✅ Admin can assign Folder Managers in assigned departments
+✅ Super Admin can assign anywhere
+❌ Folder Managers CANNOT assign other Folder Managers
+```
+
+#### Rule 4: Subfolder Creation
+```
+✅ Anyone who creates a subfolder automatically manages it
+✅ Folder Manager creating subfolder = Manager of that subfolder
+✅ Permissions automatically align with parent folder
+```
+
+---
+
+### 🎯 Why We Chose Inheritance Model
+
+#### ✅ Advantages
+
+**1. Simplicity**
+- Users intuitively understand "if I can access a folder, I can access what's inside"
+- Matches real-world expectations
+- Minimal permission management overhead
+
+**2. Ease of Implementation**
+- Permissions stored only at top-level folders
+- Simple permission check logic
+- Fewer database queries
+
+**3. User Experience**
+- No confusion about "which subfolder can I access?"
+- Natural folder navigation
+- Predictable behavior
+
+**4. Scalability**
+- Folder hierarchies can grow without permission complexity
+- One permission assignment covers entire tree
+- Reduced administrative burden
+
+#### ⚠️ Trade-offs
+
+**Limited Granularity**
+- Cannot have different managers for subfolders within same tree
+- All-or-nothing access to folder contents
+
+**When This Might Not Work:**
+- Complex organizations needing subfolder-level control
+- Different teams managing different subfolders of same parent
+- Highly compartmentalized security requirements
+
+> **Note:** For 95% of use cases, inheritance provides the right balance of security, usability, and simplicity. Advanced permission models can be added later if specific requirements emerge.
+
+---
+
+### 💾 Technical Implementation
+
+#### Database Schema
+```sql
+-- Folders support hierarchy through parent reference
+folders (
+  id,
+  name,
+  parent_folder_id,     -- NULL for top-level, references parent otherwise
+  department_id,
+  owner_id,
+  created_at
+)
+
+-- Permissions stored ONLY for top-level folders
+folder_permissions (
+  id,
+  folder_id,            -- Always top-level folder ID
+  user_id,
+  permission_level,     -- 'manager' or 'user'
+  granted_by,
+  granted_at
+)
+```
+
+#### Permission Check Algorithm
+```javascript
+function canUserAccessFolder(userId, folderId) {
+  // Step 1: Find the top-level parent folder
+  const topFolder = getTopLevelFolder(folderId);
+  
+  // Step 2: Check direct folder permission
+  const permission = getFolderPermission(userId, topFolder.id);
+  if (permission) {
+    return { allowed: true, level: permission.level };
+  }
+  
+  // Step 3: Check role-based access
+  if (userIsDeptHead(userId, topFolder.department_id)) {
+    return { allowed: true, level: 'manager' };
+  }
+  
+  if (userIsAdmin(userId, topFolder.department_id)) {
+    return { allowed: true, level: 'manager' };
+  }
+  
+  if (userIsSuperAdmin(userId)) {
+    return { allowed: true, level: 'manager' };
+  }
+  
+  // Step 4: No access
+  return { allowed: false };
+}
+
+function getTopLevelFolder(folderId) {
+  let folder = getFolder(folderId);
+  
+  // Traverse up the tree until reaching top
+  while (folder.parent_folder_id !== null) {
+    folder = getFolder(folder.parent_folder_id);
+  }
+  
+  return folder;
+}
+```
+
+#### Key Implementation Points
+
+**1. Store Permissions at Top Level Only**
+- When sharing a folder, record permission on the root folder
+- Subfolders inherit automatically through algorithm
+
+**2. Efficient Permission Checks**
+- Cache top-level folder lookups
+- Index `parent_folder_id` for fast tree traversal
+- Consider materialized paths for deep hierarchies
+
+**3. Sharing Behavior**
+```javascript
+// When Folder Manager shares a folder
+function shareFolder(folderId, targetUserId, permissionLevel) {
+  // Always resolve to top-level folder
+  const topFolder = getTopLevelFolder(folderId);
+  
+  // Create permission record
+  createPermission({
+    folderId: topFolder.id,    // Top-level only
+    userId: targetUserId,
+    level: permissionLevel
+  });
+  
+  // User now has access to entire tree
+}
+```
+
+**4. Subfolder Creation**
+```javascript
+function createSubfolder(parentFolderId, name, userId) {
+  // Verify user can create in parent
+  if (!canUserAccessFolder(userId, parentFolderId).allowed) {
+    throw new Error("Unauthorized");
+  }
+  
+  // Create subfolder - inherits parent's department
+  const parent = getFolder(parentFolderId);
+  
+  const subfolder = {
+    name: name,
+    parent_folder_id: parentFolderId,
+    department_id: parent.department_id,  // Inherit department
+    owner_id: userId
+  };
+  
+  return createFolder(subfolder);
+  // No separate permission needed - inherits from top
+}
+```
+
+---
+
+### 🔍 Practical Examples
+
+#### Example 1: Deep Nesting
+```
+Marketing Department
+  └── Q1 2025 Campaign (Manager: Abhishek)
+       └── Social Media
+            └── Instagram
+                 └── Stories
+                      └── Week 1
+                           └── video.mp4
+```
+
+**Permission Check for video.mp4:**
+1. Traverse up to "Q1 2025 Campaign" (top-level)
+2. Check if user has permission on "Q1 2025 Campaign"
+3. If yes → Access granted to video.mp4
+
+#### Example 2: Sharing Mid-Level Folder
+```
+User tries to share "Instagram" folder specifically
+```
+
+**System Behavior:**
+- Resolves to top-level "Q1 2025 Campaign"
+- Shares entire "Q1 2025 Campaign" tree
+- Shared user gets access to all siblings and parents too
+
+**Alternative (if needed):**
+- System can restrict sharing to only the specific subfolder
+- Would require storing permission at "Instagram" level
+- Makes "Instagram" effectively a new top-level for permissions
+
+#### Example 3: Cross-Department Sharing
+```
+Abhishek (Marketing) wants to share "Brand Guidelines" with Sales team
+```
+
+**System Behavior:**
+1. Abhishek is Folder Manager of "Brand Guidelines" (in Marketing dept)
+2. He shares with Priya (Sales dept member)
+3. Permission stored: folder="Brand Guidelines", user=Priya, level="user"
+4. Priya now sees "Brand Guidelines" in "Shared With Me"
+5. She can access all subfolders and files inside
 
 ---
 
