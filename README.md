@@ -430,115 +430,7 @@ Department: Marketing
 
 ---
 
-### 💾 Technical Implementation
 
-#### Database Schema
-```sql
--- Folders support hierarchy through parent reference
-folders (
-  id,
-  name,
-  parent_folder_id,     -- NULL for top-level, references parent otherwise
-  department_id,
-  owner_id,
-  created_at
-)
-
--- Permissions stored ONLY for top-level folders
-folder_permissions (
-  id,
-  folder_id,            -- Always top-level folder ID
-  user_id,
-  permission_level,     -- 'manager' or 'user'
-  granted_by,
-  granted_at
-)
-```
-
-#### Permission Check Algorithm
-```javascript
-function canUserAccessFolder(userId, folderId) {
-  // Step 1: Find the top-level parent folder
-  const topFolder = getTopLevelFolder(folderId);
-  
-  // Step 2: Check direct folder permission
-  const permission = getFolderPermission(userId, topFolder.id);
-  if (permission) {
-    return { allowed: true, level: permission.level };
-  }
-  
-  // Step 3: Check role-based access
-  if (userIsDeptHead(userId, topFolder.department_id)) {
-    return { allowed: true, level: 'manager' };
-  }
-  
-  if (userIsAdmin(userId, topFolder.department_id)) {
-    return { allowed: true, level: 'manager' };
-  }
-  
-  if (userIsSuperAdmin(userId)) {
-    return { allowed: true, level: 'manager' };
-  }
-  
-  // Step 4: No access
-  return { allowed: false };
-}
-
-function getTopLevelFolder(folderId) {
-  let folder = getFolder(folderId);
-  
-  // Traverse up the tree until reaching top
-  while (folder.parent_folder_id !== null) {
-    folder = getFolder(folder.parent_folder_id);
-  }
-  
-  return folder;
-}
-```
-
-#### Key Implementation Points
-
-**1. Store Permissions at Top Level Only**
-- When sharing a folder, record permission on the root folder
-- Subfolders inherit automatically through algorithm
-
-**2. Efficient Permission Checks**
-- Cache top-level folder lookups
-- Index `parent_folder_id` for fast tree traversal
-- Consider materialized paths for deep hierarchies
-
-**3. Sharing Behavior**
-```javascript
-// When Folder Manager shares a folder
-function shareFolder(folderId, targetUserId, permissionLevel) {
-  // Always resolve to top-level folder
-  const topFolder = getTopLevelFolder(folderId);
-  
-  // Create permission record
-  createPermission({
-    folderId: topFolder.id,    // Top-level only
-    userId: targetUserId,
-    level: permissionLevel
-  });
-  
-  // User now has access to entire tree
-}
-```
-
-**4. Subfolder Creation**
-```javascript
-function createSubfolder(parentFolderId, name, userId) {
-  // Verify user can create in parent
-  if (!canUserAccessFolder(userId, parentFolderId).allowed) {
-    throw new Error("Unauthorized");
-  }
-  
-  // Create subfolder - inherits parent's department
-  const parent = getFolder(parentFolderId);
-  
-  const subfolder = {
-    name: name,
-    parent_folder_id: parentFolderId,
     department_id: parent.department_id,  // Inherit department
     owner_id: userId
   };
@@ -597,6 +489,71 @@ Abhishek (Marketing) wants to share "Brand Guidelines" with Sales team
 
 ---
 
+## ❓ Additional Design Questions & Our Approach
+
+### Question 4: Can Folder Users Create Subfolders?
+
+**The Question:**
+Should a Folder User (someone who has been given access to a folder) be allowed to create subfolders or upload files inside that shared folder?
+
+**Our Approach: NO - Folder Users CANNOT create subfolders**
+
+#### Why This Decision?
+
+**1. Structural Control**
+- Creating subfolders = Changing folder organization
+- Only managers should control structure
+- Prevents chaos from multiple users creating folders
+
+**2. Clear Role Separation**
+- Folder Manager = Structure & Organization
+- Folder User = Content & Collaboration
+- Clean separation prevents confusion
+
+**3. Accountability**
+- Manager maintains folder organization
+- Users focus on their work
+- Clear ownership of folder structure
+
+#### What Folder Users CAN Do
+
+✅ **Allowed:**
+- View all files and subfolders
+- Upload files to existing subfolders (if granted permission)
+- Download files
+- Edit files (if granted permission)
+
+❌ **Not Allowed:**
+- Create new subfolders
+- Delete any content
+- Share the folder
+- Change folder structure
+- Modify permissions
+
+#### The Workflow
+
+**If a Folder User needs a new subfolder:**
+1. Request Folder Manager to create it
+2. Manager creates the subfolder
+3. Manager grants appropriate access
+4. User uploads to the new subfolder
+
+This maintains clean organization and accountability.
+
+---
+
+### Summary of Our Design Approach
+
+| Aspect | Our Approach | Reason |
+|--------|-------------|--------|
+| **Nested Folder Permissions** | Inheritance Model | Simplicity and intuitive behavior |
+| **Subfolder Access** | Automatic from parent | User expects to see everything inside |
+| **Folder Manager Assignment** | By Admin/Dept Head | Clear authority chain |
+| **Folder User Subfolder Creation** | ❌ Not Allowed | Maintains structure control |
+| **Folder User File Upload** | ✅ Allowed (if granted) | Enables collaboration |
+
+---
+
 ## 📝 Implementation Notes
 
 ### Best Practices
@@ -645,4 +602,3 @@ For questions about role assignments or permission issues, contact your **Super 
 **Version:** 2.0  
 **Last Updated:** December 2025  
 **Security Classification:** Internal Use
-
